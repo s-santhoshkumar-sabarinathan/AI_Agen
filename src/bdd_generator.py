@@ -268,10 +268,10 @@ if __name__ == "__main__":
     generator = AIBDDGenerator()
     
     my_scenario = """
-    As a user, I want to check the admin temporary closure page.
-    
-    Test cases should cover:
-    1. Admin Temporary Closure page supports adding a new temp closure.
+        As a user, I want to check the admin temporary closure page.
+        
+        Test cases should cover:
+        1. Admin Temporary Closure page supports adding a new temp closure.
     """
     
     result = generator.generate_feature_file(my_scenario)
