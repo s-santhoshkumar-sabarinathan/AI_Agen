@@ -1,0 +1,277 @@
+"""
+AI BDD Generator - Generates pytest-bdd feature files from plain English
+Uses: Groq API (Free, Fast) + pytest-bdd + Jinja2
+Author: Madhu Sudhan, Santhoshkumar
+"""
+
+import os
+import re
+from datetime import datetime
+from dotenv import load_dotenv
+from groq import Groq
+from jinja2 import Template
+
+# Load environment variables
+load_dotenv()
+
+class AIBDDGenerator:
+    """Generates BDD feature files and pytest step definitions using AI"""
+    
+    def __init__(self):
+        self.client = Groq(api_key=os.getenv('GROQ_API_KEY'))
+        os.makedirs("output/features", exist_ok=True)
+        os.makedirs("output/steps", exist_ok=True)
+        self.step_template = self._load_step_template()
+    
+    def generate_feature_file(self, scenario_description):
+        """
+        Main method: Converts plain English → Gherkin feature file
+        
+        Args:
+            scenario_description (str): Plain English requirement
+        
+        Returns:
+            dict: Paths to generated files
+        """
+        
+        gherkin_content = self._generate_gherkin(scenario_description)
+        
+        if not self._validate_gherkin(gherkin_content):
+            return self.generate_feature_file(scenario_description)
+        
+        scenarios = self._parse_scenarios(gherkin_content)
+        feature_name = self._extract_feature_name(gherkin_content)
+        step_definitions = self._generate_step_definitions(scenarios, feature_name)
+        
+        feature_path = self._save_feature_file(feature_name, gherkin_content)
+        steps_path = self._save_step_definitions(feature_name, step_definitions)
+        
+        print(f"\nFeature: {feature_path}")
+        print(f"Steps: {steps_path}")
+        print(f"Scenarios: {len(scenarios)}")
+        
+        return {
+            'feature_file': feature_path,
+            'step_definitions': steps_path,
+            'scenarios_count': len(scenarios)
+        }
+    
+    def _generate_gherkin(self, requirement):
+        """Use Groq AI to generate Gherkin syntax"""
+        
+        prompt = f"""You are a QA expert specializing in BDD (Behavior-Driven Development).
+
+        Convert this requirement into a complete Gherkin feature file:
+
+        REQUIREMENT:
+        {requirement}
+
+        INSTRUCTIONS:
+        1. Create a Feature with proper user story format (As a... I want... So that...)
+        2. Generate 3 scenarios:
+        - Positive scenario (happy path)
+        - Negative scenario (error case)
+        - Edge case scenario
+        3. Use proper Gherkin keywords: Feature, Scenario, Given, When, Then, And
+        4. Add tags: @smoke, @regression, @positive, @negative
+        5. Keep steps simple and suitable for Selenium automation
+        6. Use realistic test data
+
+        OUTPUT ONLY THE FEATURE FILE CONTENT. NO EXPLANATIONS.
+
+        Example format:
+        @login @smoke
+        Feature: User Login
+        As a user
+        I want to login
+        So that I can access my account
+
+        @positive
+        Scenario: Successful login
+            Given the user is on login page
+            When the user enters valid credentials
+            Then the user should see dashboard
+        """
+        
+        response = self.client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=2000
+        )
+        return response.choices[0].message.content.strip()
+    
+    def _validate_gherkin(self, gherkin_content):
+        """Validate Gherkin has proper structure"""
+        required_keywords = ['Feature:', 'Scenario:', 'Given', 'When', 'Then']
+        return all(keyword in gherkin_content for keyword in required_keywords)
+    
+    def _parse_scenarios(self, gherkin_content):
+        """Extract individual scenarios from Gherkin"""
+        scenarios = []
+        scenario_blocks = re.split(r'\n\s*Scenario:', gherkin_content)
+        
+        for block in scenario_blocks[1:]:
+            scenario_name = re.search(r'(.+?)\n', block)
+            if scenario_name:
+                scenarios.append({
+                    'name': scenario_name.group(1).strip(),
+                    'given': re.findall(r'Given\s+(.+)', block),
+                    'when': re.findall(r'When\s+(.+)', block),
+                    'then': re.findall(r'Then\s+(.+)', block),
+                    'and': re.findall(r'And\s+(.+)', block)
+                })
+        
+        return scenarios
+    
+    def _extract_feature_name(self, gherkin_content):
+        """Extract feature name from Gherkin"""
+        match = re.search(r'Feature:\s*(.+)', gherkin_content)
+        return match.group(1).strip() if match else "UnknownFeature"
+    
+    def _load_step_template(self):
+        """Load Jinja2 template for pytest-bdd step definitions"""
+        
+        template_str = '''"""
+            Step definitions for {{ feature_name }}
+            Generated by AI BDD Generator
+            Framework: pytest-bdd
+            """
+
+            from pytest_bdd import given, when, then, scenarios, parsers
+            from selenium import webdriver
+            from selenium.webdriver.common.by import By
+            from selenium.webdriver.support.ui import WebDriverWait
+            from selenium.webdriver.support import expected_conditions as EC
+            import pytest
+
+            # Load all scenarios from feature file
+            scenarios('../features/{{ feature_file_name }}')
+
+            # Fixtures
+            @pytest.fixture
+            def browser():
+                """Initialize Chrome WebDriver"""
+                driver = webdriver.Chrome()
+                driver.maximize_window()
+                yield driver
+                driver.quit()
+
+            @pytest.fixture
+            def wait(browser):
+                """WebDriver wait object"""
+                return WebDriverWait(browser, 10)
+
+
+            # Given Steps
+            {% for step in given_steps %}
+            @given('{{ step.text }}')
+            def {{ step.method_name }}(browser):
+                """{{ step.text }}"""
+                # TODO: Implement this step
+                # Example: browser.get("https://example.com")
+                pass
+            {% endfor %}
+
+            # When Steps
+            {% for step in when_steps %}
+            @when('{{ step.text }}')
+            def {{ step.method_name }}(browser):
+                """{{ step.text }}"""
+                # TODO: Implement this step
+                # Example: browser.find_element(By.ID, "username").send_keys("test")
+                pass
+            {% endfor %}
+
+            # Then Steps
+            {% for step in then_steps %}
+            @then('{{ step.text }}')
+            def {{ step.method_name }}(browser):
+                """{{ step.text }}"""
+                # TODO: Implement assertion
+                # Example: assert "Dashboard" in browser.title
+                pass
+            {% endfor %}
+        '''
+        return Template(template_str)
+    
+    def _generate_step_definitions(self, scenarios, feature_name):
+        """Generate pytest-bdd step definitions using Jinja2"""
+        given_steps = []
+        when_steps = []
+        then_steps = []
+        seen_steps = set()
+        
+        for scenario in scenarios:
+            for step_text in scenario.get('given', []):
+                if step_text not in seen_steps:
+                    given_steps.append({
+                        'text': step_text,
+                        'method_name': self._to_snake_case(step_text)
+                    })
+                    seen_steps.add(step_text)
+            
+            for step_text in scenario.get('when', []):
+                if step_text not in seen_steps:
+                    when_steps.append({
+                        'text': step_text,
+                        'method_name': self._to_snake_case(step_text)
+                    })
+                    seen_steps.add(step_text)
+            
+            for step_text in scenario.get('then', []):
+                if step_text not in seen_steps:
+                    then_steps.append({
+                        'text': step_text,
+                        'method_name': self._to_snake_case(step_text)
+                    })
+                    seen_steps.add(step_text)
+        
+        feature_file_name = self._to_snake_case(feature_name) + ".feature"
+        
+        return self.step_template.render(
+            feature_name=feature_name,
+            feature_file_name=feature_file_name,
+            given_steps=given_steps,
+            when_steps=when_steps,
+            then_steps=then_steps
+        )
+    
+    def _to_snake_case(self, text):
+        """Convert text to snake_case for Python method names"""
+        text = re.sub(r'[^\w\s]', '', text)
+        text = re.sub(r'\s+', '_', text.lower())
+        return text.strip('_')[:50]
+    
+    def _save_feature_file(self, feature_name, content):
+        """Save Gherkin feature file"""
+        filename = f"{self._to_snake_case(feature_name)}.feature"
+        filepath = os.path.join("output", "features", filename)
+        
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(content)
+        
+        return filepath
+    
+    def _save_step_definitions(self, feature_name, content):
+        """Save Python step definitions"""
+        filename = f"test_{self._to_snake_case(feature_name)}.py"
+        filepath = os.path.join("output", "steps", filename)
+        
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(content)
+        
+        return filepath
+
+
+if __name__ == "__main__":
+    generator = AIBDDGenerator()
+    
+    my_scenario = """
+    As a user, I want to check the admin temporary closure page.
+    
+    Test cases should cover:
+    1. Admin Temporary Closure page supports adding a new temp closure.
+    """
+    
+    result = generator.generate_feature_file(my_scenario)
